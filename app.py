@@ -24,30 +24,27 @@ def initialize_data():
                 df['wrong_count'] = 0
             
             # 3. 強制生成唯一的「行號」 (original_index)
-            # 無論 CSV 原本有沒有 ID，我們都以目前的物理行序為準
             df = df.reset_index(drop=True) 
             df['original_index'] = df.index + 1  # 從 1 開始
             
             st.session_state.df = df
         except Exception as e:
-            st.error(f"讀取 CSV 失敗，請確保 answer.csv 存在且格式正確。錯誤：{e}")
-            # 建立空表作為後備
+            st.error(f"讀取 CSV 失敗，請確保 answer.csv 存在。錯誤：{e}")
             st.session_state.df = pd.DataFrame(columns=['question', '正確答案', 'wrong_count', 'original_index'])
 
 initialize_data()
 
-# --- Session State 初始化 (測驗流程控制) ---
+# --- Session State 初始化 ---
 if 'test_set' not in st.session_state:
-    st.session_state.test_set = []        # 當前測驗題目清單
-    st.session_state.current_idx = 0     # 當前題序
-    st.session_state.submitted = False   # 是否已提交答案
-    st.session_state.last_result = None  # 上一題的結果反饋
+    st.session_state.test_set = []
+    st.session_state.current_idx = 0
+    st.session_state.submitted = False
+    st.session_state.last_result = None
 
 # --- 側邊欄導航 ---
 st.sidebar.title("🎮 功能選單")
 mode = st.sidebar.radio("請選擇模式", ["隨機測驗", "錯題本管理", "隨機錯題本測驗"])
 
-# 模式切換時自動重置測驗狀態
 if 'last_mode' not in st.session_state:
     st.session_state.last_mode = mode
 if st.session_state.last_mode != mode:
@@ -65,12 +62,9 @@ def render_quiz(quiz_data, mode_title):
     idx = st.session_state.current_idx
     if idx < len(quiz_data):
         q = quiz_data[idx]
-        
-        # 顯示當前進度與行號
         st.write(f"**[{mode_title}] 第 {idx + 1} / {len(quiz_data)} 題** (行號: {q.get('original_index', 'N/A')})")
         st.subheader(q.get('question', '題目內容缺失'))
         
-        # 動態提取選項 (A-Z)
         opts = {}
         for i in range(26):
             col = f'選項{chr(65+i)}'
@@ -80,9 +74,7 @@ def render_quiz(quiz_data, mode_title):
         options_text = [f"{k}. {v}" for k, v in opts.items()]
         
         if not st.session_state.submitted:
-            # 使用 key 確保 radio 組件在題目切換時重置
             user_choice = st.radio("請選擇答案：", options_text, key=f"radio_{idx}_{q.get('original_index')}")
-            
             if st.button("提交答案", key="submit_btn"):
                 st.session_state.submitted = True
                 user_ans = user_choice[0] if user_choice else ""
@@ -92,11 +84,9 @@ def render_quiz(quiz_data, mode_title):
                     st.session_state.last_result = ("success", "✅ 正確！")
                 else:
                     st.session_state.last_result = ("error", f"❌ 錯誤！正確答案是：{correct_ans}")
-                    # 精確更新原始 DataFrame 中的錯誤次數
                     st.session_state.df.loc[st.session_state.df['original_index'] == q['original_index'], 'wrong_count'] += 1
                 st.rerun()
         else:
-            # 顯示結果
             res_type, res_msg = st.session_state.last_result
             if res_type == "success": st.success(res_msg)
             else: st.error(res_msg)
@@ -117,20 +107,16 @@ def render_quiz(quiz_data, mode_title):
 
 if mode == "隨機測驗":
     st.header("📝 隨機全測驗")
-    
-    # 如果還沒開始測驗，顯示設置界面
     if not st.session_state.test_set:
         max_num = len(st.session_state.df)
         num = st.number_input("抽取題數", 1, max_num, min(100, max_num))
         if st.button("開始測驗", type="primary"):
-            # 抽取題目並轉換為字典列表
             sampled_df = st.session_state.df.sample(n=num)
             st.session_state.test_set = sampled_df.to_dict('records')
             st.session_state.current_idx = 0
             st.session_state.submitted = False
             st.rerun()
     else:
-        # 已在測驗中，顯示測驗內容與中止按鈕
         if st.sidebar.button("❌ 終止測驗"):
             st.session_state.test_set = []
             st.rerun()
@@ -138,7 +124,8 @@ if mode == "隨機測驗":
 
 elif mode == "錯題本管理":
     st.header("📓 題庫管理中心")
-    tab1, tab2, tab3 = st.tabs(["🔍 查看所有題目", "➕ 新增題目", "🗑️ 刪除題目"])
+    # 新增了「❌ 錯題統計檢視」分頁
+    tab1, tab2, tab3, tab4 = st.tabs(["🔍 查看所有題目", "➕ 新增題目", "🗑️ 刪除題目", "❌ 錯題統計檢視"])
 
     with tab1:
         st.dataframe(
@@ -171,18 +158,47 @@ elif mode == "錯題本管理":
         if st.button("確認永久刪除", type="primary"):
             if del_target in st.session_state.df['original_index'].values:
                 st.session_state.df = st.session_state.df[st.session_state.df['original_index'] != del_target]
-                st.warning(f"行號 {del_target} 的題目已從內存中移除。")
+                st.warning(f"行號 {del_target} 的題目已移除。")
                 st.rerun()
             else:
-                st.error("找不到該行號，請檢查查看頁面。")
+                st.error("找不到該行號。")
+
+    with tab4:
+        st.subheader("❌ 錯題本統計")
+        # 篩選出錯誤次數大於 0 的題目
+        wrong_only_df = st.session_state.df[st.session_state.df['wrong_count'] > 0].copy()
+        
+        if wrong_only_df.empty:
+            st.success("目前沒有錯題記錄，太棒了！")
+        else:
+            # 按錯誤次數降序排列，讓最常錯的排在前面
+            wrong_only_df = wrong_only_df.sort_values(by='wrong_count', ascending=False)
+            
+            st.write(f"目前共有 **{len(wrong_only_df)}** 道題目曾出錯。")
+            
+            # 顯示表格
+            st.dataframe(
+                wrong_only_df[['original_index', 'wrong_count', 'question', '正確答案']], 
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # 提供一個清空單個錯題記錄的功能
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                reset_id = st.number_input("輸入要歸零錯誤數的行號", step=1, min_value=1, key="reset_idx")
+            with col2:
+                if st.button("重置該題錯誤數"):
+                    st.session_state.df.loc[st.session_state.df['original_index'] == reset_id, 'wrong_count'] = 0
+                    st.success(f"行號 {reset_id} 已從錯題本中移除")
+                    st.rerun()
 
 elif mode == "隨機錯題本測驗":
     st.header("🔥 錯題強化訓練")
-    
     if not st.session_state.test_set:
         wrong_df = st.session_state.df[st.session_state.df['wrong_count'] > 0]
         if wrong_df.empty:
-            st.info("✨ 太棒了！目前沒有任何錯題記錄，請繼續保持。")
+            st.info("✨ 太棒了！目前沒有任何錯題記錄。")
         else:
             st.write(f"目前錯題本中共計 **{len(wrong_df)}** 題。")
             if st.button("開始隨機抽題測驗", type="primary"):
