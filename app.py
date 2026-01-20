@@ -99,7 +99,7 @@ if mode == "隨機測驗":
                 # 選項靜態展示
                 for k, v in opts_map.items():
                     color = "green" if k == q['正確答案'] else "black"
-                    st.markdown(f"<span style='color:{color}'>{k}. {v}</span>", unsafe_allow_allow_html=True)
+                    st.markdown(f"<span style='color:{color}'>{k}. {v}</span>", unsafe_allow_html=True)
 
                 if st.button("下一題 ➡️"):
                     st.session_state.current_idx += 1
@@ -133,3 +133,4 @@ elif mode == "錯題回顧":
                         st.write(f"{prefix} {chr(char_code)}. {wq[col_name]}")
                 
                 st.info(f"正確答案：{wq['正確答案']}")
+
