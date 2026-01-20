@@ -5,19 +5,19 @@ import os
 # --- 1. 頁面配置與樣式 ---
 st.set_page_config(page_title="澳門法例刷題助手", layout="centered")
 
+# 修正處：將 unsafe_index 改為 unsafe_allow_html
 st.markdown("""
     <style>
     .stRadio [role="radiogroup"] { margin-top: 10px; }
     .main { background-color: #f8f9fa; }
     </style>
-    """, unsafe_index=True)
+    """, unsafe_allow_html=True)
 
 # --- 2. 數據核心邏輯 ---
 
 def save_to_csv():
     """將當前內存中的 df 永久保存到檔案"""
     try:
-        # 保存前移除我們自建的輔助欄位 original_index
         save_df = st.session_state.df.copy()
         if 'original_index' in save_df.columns:
             save_df = save_df.drop(columns=['original_index'])
@@ -33,13 +33,10 @@ def initialize_data():
         if os.path.exists("answer.csv"):
             try:
                 df = pd.read_csv("answer.csv")
-                # 預處理：清洗答案格式
                 if '正確答案' in df.columns:
                     df['正確答案'] = df['正確答案'].astype(str).str.strip().str.upper()
-                # 初始化錯誤計數
                 if 'wrong_count' not in df.columns:
                     df['wrong_count'] = 0
-                # 強制生成唯一行號
                 df = df.reset_index(drop=True)
                 df['original_index'] = df.index + 1
                 st.session_state.df = df
@@ -62,7 +59,6 @@ if 'test_set' not in st.session_state:
 st.sidebar.title("🎮 功能選單")
 mode = st.sidebar.radio("請選擇模式", ["隨機測驗", "錯題本管理", "隨機錯題本測驗"])
 
-# 切換模式時清空當前測驗狀態
 if 'last_mode' not in st.session_state:
     st.session_state.last_mode = mode
 if st.session_state.last_mode != mode:
@@ -86,7 +82,6 @@ def render_quiz(quiz_data, mode_title):
         st.write(f"**[{mode_title}] 第 {idx + 1} / {len(quiz_data)} 題** (行號: {row_num})")
         st.subheader(q.get('question', '未命名題目'))
         
-        # 提取 A-Z 選項
         opts = {chr(65+i): q[f'選項{chr(65+i)}'] for i in range(26) 
                 if f'選項{chr(65+i)}' in q and pd.notna(q[f'選項{chr(65+i)}'])}
         options_text = [f"{k}. {v}" for k, v in opts.items()]
@@ -102,9 +97,8 @@ def render_quiz(quiz_data, mode_title):
                     st.session_state.last_result = ("success", "✅ 正確！")
                 else:
                     st.session_state.last_result = ("error", f"❌ 錯誤！正確答案是：{correct_ans}")
-                    # 同步更新原始 DataFrame 中的錯誤次數
                     st.session_state.df.loc[st.session_state.df['original_index'] == row_num, 'wrong_count'] += 1
-                    save_to_csv() # 自動保存錯誤進度
+                    save_to_csv()
                 st.rerun()
         else:
             res_type, res_msg = st.session_state.last_result
@@ -125,11 +119,9 @@ def render_quiz(quiz_data, mode_title):
 
 # --- 6. 主頁面邏輯 ---
 
-# --- 模式 1：隨機測驗 ---
 if mode == "隨機測驗":
     st.header("📝 隨機全測驗")
     if not st.session_state.test_set:
-        # 設置界面
         max_num = len(st.session_state.df)
         num = st.number_input("抽取題數", 1, max_num, min(10, max_num))
         if st.button("開始測驗", type="primary"):
@@ -137,13 +129,11 @@ if mode == "隨機測驗":
             st.session_state.current_idx = 0
             st.rerun()
     else:
-        # 測驗進行中界面
         if st.sidebar.button("❌ 中止測驗"):
             st.session_state.test_set = []
             st.rerun()
         render_quiz(st.session_state.test_set, "隨機測驗")
 
-# --- 模式 2：錯題本管理 ---
 elif mode == "錯題本管理":
     st.header("📓 題庫管理中心")
     tab1, tab2, tab3, tab4 = st.tabs(["🔍 查看全部", "➕ 新增題目", "🗑️ 刪除題目", "❌ 錯題歸零管理"])
@@ -203,7 +193,6 @@ elif mode == "錯題本管理":
                     save_to_csv()
                     st.rerun()
 
-# --- 模式 3：隨機錯題本測驗 ---
 elif mode == "隨機錯題本測驗":
     st.header("🔥 錯題強化訓練")
     if not st.session_state.test_set:
