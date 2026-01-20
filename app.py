@@ -5,131 +5,157 @@ import random
 # --- 頁面配置 ---
 st.set_page_config(page_title="澳門法例刷題助手", layout="centered")
 
-# --- 數據載入 ---
-@st.cache_data
-def load_data():
-    try:
-        df = pd.read_csv("answer.csv")
-        # 統一格式
-        df['正確答案'] = df['正確答案'].astype(str).str.strip().str.upper()
-        return df
-    except Exception as e:
-        st.error(f"讀取 CSV 失敗，請確認 answer.csv 是否與代碼在同一資料夾。錯誤：{e}")
-        return None
+# --- 數據初始化 ---
+def initialize_data():
+    if 'df' not in st.session_state:
+        try:
+            # 讀取初始 CSV
+            df = pd.read_csv("answer.csv")
+            # 統一格式並增加「錯誤次數」欄位
+            df['正確答案'] = df['正確答案'].astype(str).str.strip().str.upper()
+            if 'wrong_count' not in df.columns:
+                df['wrong_count'] = 0
+            if 'id' not in df.columns:
+                df['id'] = range(1, len(df) + 1)
+            st.session_state.df = df
+        except Exception as e:
+            st.error(f"讀取 CSV 失敗，請確保 answer.csv 存在。錯誤：{e}")
+            # 若無檔案則建立空表
+            st.session_state.df = pd.DataFrame(columns=['id', 'question', '正確答案', 'wrong_count'])
 
-df = load_data()
+initialize_data()
 
-# --- 初始化 Session State ---
+# --- Session State 用於測驗流程 ---
 if 'test_set' not in st.session_state:
     st.session_state.test_set = []
     st.session_state.current_idx = 0
-    st.session_state.wrong_list = []
-    st.session_state.submitted = False # 標記是否已提交答案
-    st.session_state.last_result = None # 儲存當前題目的對錯反饋
+    st.session_state.submitted = False
+    st.session_state.last_result = None
 
-# --- 側邊欄控制 ---
+# --- 側邊欄控制 (三個模式) ---
 st.sidebar.title("🎮 功能選單")
-mode = st.sidebar.radio("請選擇模式", ["隨機測驗", "錯題回顧"])
+mode = st.sidebar.radio("請選擇模式", ["隨機測驗", "錯題本管理", "隨機錯題本測驗"])
 
-if mode == "隨機測驗":
-    num = st.sidebar.slider("抽取題數", 5, 100, 20)
-    if st.sidebar.button("✨ 生成新考卷"):
-        if df is not None:
-            st.session_state.test_set = df.sample(n=min(num, len(df))).to_dict('records')
+# --- 輔助函數：測驗組件 ---
+def render_quiz(quiz_data, mode_title):
+    if not quiz_data:
+        st.info(f"💡 目前沒有題目可以進行 {mode_title}。")
+        return
+
+    idx = st.session_state.current_idx
+    if idx < len(quiz_data):
+        q = quiz_data[idx]
+        st.write(f"**[{mode_title}] 第 {idx + 1} / {len(quiz_data)} 題** (ID: {q['id']})")
+        st.subheader(q['question'])
+        
+        # 動態抓取選項
+        opts = {}
+        for i in range(26):
+            col = f'選項{chr(65+i)}'
+            if col in q and pd.notna(q[col]):
+                opts[chr(65+i)] = q[col]
+        
+        options_text = [f"{k}. {v}" for k, v in opts.items()]
+        
+        if not st.session_state.submitted:
+            user_choice = st.radio("請選擇答案：", options_text, key=f"q_{idx}")
+            if st.button("提交答案"):
+                st.session_state.submitted = True
+                user_ans = user_choice[0]
+                correct_ans = str(q['正確答案'])
+                
+                if user_ans == correct_ans:
+                    st.session_state.last_result = ("success", "✅ 正確！")
+                else:
+                    st.session_state.last_result = ("error", f"❌ 錯誤！正確答案是：{correct_ans}")
+                    # 更新原始 DataFrame 中的錯誤次數
+                    st.session_state.df.loc[st.session_state.df['id'] == q['id'], 'wrong_count'] += 1
+                st.rerun()
+        else:
+            res_type, res_msg = st.session_state.last_result
+            if res_type == "success": st.success(res_msg)
+            else: st.error(res_msg)
+            
+            if st.button("下一題 ➡️"):
+                st.session_state.current_idx += 1
+                st.session_state.submitted = False
+                st.rerun()
+    else:
+        st.balloons()
+        st.success("🎉 測驗完成！")
+        if st.button("重置並返回"):
+            st.session_state.test_set = []
             st.session_state.current_idx = 0
-            st.session_state.submitted = False
-            st.session_state.last_result = None
             st.rerun()
 
 # --- 主界面邏輯 ---
 
-
+# 模式 1: 隨機測驗 (全部題目)
 if mode == "隨機測驗":
-    if not st.session_state.test_set:
-        st.info("💡 準備好了嗎？在左側設定題數並點擊『生成新考卷』開始練習。")
-    else:
-        idx = st.session_state.current_idx
-        
-        # 檢查是否已做完
-        if idx < len(st.session_state.test_set):
-            q = st.session_state.test_set[idx]
-            
-            # 進度條
-            progress = (idx) / len(st.session_state.test_set)
-            st.progress(progress)
-            st.write(f"**第 {idx + 1} / {len(st.session_state.test_set)} 題** (ID: {q.get('id', 'N/A')})")
-            
-            # 顯示題目
-            st.subheader(q['question'])
-            
-            # 動態解析選項 (過濾掉 NaN)
-            opts_map = {} # {'A': '內容', 'B': '內容'}
-            for i in range(26): # 支持最多 A-Z
-                col = f'選項{chr(65+i)}'
-                if col in q and pd.notna(q[col]):
-                    opts_map[chr(65+i)] = q[col]
-            
-            labels = list(opts_map.keys())
-            options_text = [f"{k}. {v}" for k, v in opts_map.items()]
-            
-            # 如果還沒提交，顯示單選框
-            if not st.session_state.submitted:
-                user_choice_text = st.radio("請選擇：", options_text, key=f"radio_{idx}")
-                
-                if st.button("確認提交"):
-                    user_label = user_choice_text[0] # 取出開頭的 A, B, C...
-                    correct_label = str(q['正確答案'])
-                    
-                    st.session_state.submitted = True
-                    if user_label == correct_label:
-                        st.session_state.last_result = ("success", "✅ 回答正確！")
-                    else:
-                        st.session_state.last_result = ("error", f"❌ 回答錯誤！正確答案是：{correct_label}")
-                        # 記錄到錯題本
-                        if q not in st.session_state.wrong_list:
-                            st.session_state.wrong_list.append(q)
-                    st.rerun()
-            
-            # 提交後顯示結果與下一題按鈕
-            else:
-                res_type, res_msg = st.session_state.last_result
-                if res_type == "success": st.success(res_msg)
-                else: st.error(res_msg)
-                
-                # 選項靜態展示
-                for k, v in opts_map.items():
-                    color = "green" if k == q['正確答案'] else "black"
-                    st.markdown(f"<span style='color:{color}'>{k}. {v}</span>", unsafe_allow_allow_html=True)
+    st.header("📝 隨機全測驗")
+    num = st.number_input("抽取題數", 1, len(st.session_state.df), 5)
+    if st.button("開始測驗"):
+        st.session_state.test_set = st.session_state.df.sample(n=num).to_dict('records')
+        st.session_state.current_idx = 0
+        st.session_state.submitted = False
+        st.rerun()
+    
+    if st.session_state.test_set and mode == "隨機測驗":
+        render_quiz(st.session_state.test_set, "隨機測驗")
 
-                if st.button("下一題 ➡️"):
-                    st.session_state.current_idx += 1
-                    st.session_state.submitted = False
-                    st.session_state.last_result = None
-                    st.rerun()
-        else:
-            st.balloons()
-            st.success("🎉 太棒了！你已經完成了本次所有題目。")
-            if st.button("回首頁重新開始"):
-                st.session_state.test_set = []
+# 模式 2: 錯題本 (包含查看、新增、刪除)
+elif mode == "錯題本管理":
+    st.header("📓 錯題本中心")
+    tab1, tab2, tab3 = st.tabs(["查看所有題目", "新增題目", "刪除題目"])
+
+    with tab1:
+        st.write("目前的題庫狀態：")
+        # 顯示時只選取部分欄位以免過長
+        display_df = st.session_state.df[['id', 'question', '正確答案', 'wrong_count']]
+        st.dataframe(display_df, use_container_width=True)
+
+    with tab2:
+        st.subheader("添加新題目")
+        with st.form("add_form"):
+            new_q = st.text_area("題目內容")
+            new_a = st.text_input("正確答案 (如: A)")
+            new_optA = st.text_input("選項 A")
+            new_optB = st.text_input("選項 B")
+            submitted = st.form_submit_button("確認新增")
+            if submitted:
+                new_id = int(st.session_state.df['id'].max() + 1) if not st.session_state.df.empty else 1
+                new_row = {
+                    'id': new_id, 'question': new_q, '正確答案': new_a.upper(), 
+                    '選項A': new_optA, '選項B': new_optB, 'wrong_count': 0
+                }
+                st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+                st.success(f"題目 ID {new_id} 已新增")
                 st.rerun()
 
-elif mode == "錯題回顧":
-    st.header("📓 我的錯題本")
-    if not st.session_state.wrong_list:
-        st.write("目前沒有錯題記錄。繼續加油，保持零錯題！")
+    with tab3:
+        st.subheader("刪除題目")
+        del_id = st.number_input("輸入要刪除的題目 ID", step=1)
+        if st.button("確認刪除", type="primary"):
+            st.session_state.df = st.session_state.df[st.session_state.df['id'] != del_id]
+            st.warning(f"ID {del_id} 已被刪除")
+            st.rerun()
+
+# 模式 3: 隨機錯題本測驗
+elif mode == "隨機錯題本測驗":
+    st.header("🔥 錯題強化訓練")
+    # 篩選錯誤次數 > 0 的題目
+    wrong_df = st.session_state.df[st.session_state.df['wrong_count'] > 0]
+    
+    if wrong_df.empty:
+        st.info("太棒了！目前沒有任何錯題記錄。")
     else:
-        st.write(f"累計錯題：{len(st.session_state.wrong_list)} 題")
-        for i, wq in enumerate(st.session_state.wrong_list):
-            with st.expander(f"錯題 {i+1}：{wq['question'][:30]}..."):
-                st.write(f"**完整題目：**\n{wq['question']}")
-                
-                st.write("**選項：**")
-                # 循環顯示所有非空的選項
-                for char_code in range(65, 91): # A-Z
-                    col_name = f"選項{chr(char_code)}"
-                    if col_name in wq and pd.notna(wq[col_name]):
-                        # 標註正確答案
-                        prefix = "👉" if chr(char_code) == str(wq['正確答案']) else "　"
-                        st.write(f"{prefix} {chr(char_code)}. {wq[col_name]}")
-                
-                st.info(f"正確答案：{wq['正確答案']}")
+        st.write(f"目前錯題本中共計 {len(wrong_df)} 題。")
+        if st.button("開始隨機抽題測驗"):
+            # 全部錯題隨機排序
+            st.session_state.test_set = wrong_df.sample(frac=1).to_dict('records')
+            st.session_state.current_idx = 0
+            st.session_state.submitted = False
+            st.rerun()
+        
+        if st.session_state.test_set and mode == "隨機錯題本測驗":
+            render_quiz(st.session_state.test_set, "錯題測驗")
