@@ -5,18 +5,18 @@ import os
 # --- 1. 頁面配置與樣式 ---
 st.set_page_config(page_title="澳門法例刷題助手", layout="centered")
 
-# 修正處：將 unsafe_index 改為 unsafe_allow_html
 st.markdown("""
     <style>
     .stRadio [role="radiogroup"] { margin-top: 10px; }
-    .main { background-color: #f8f9fa; }
+    .stButton button { width: 100%; }
+    /* 讓正確/錯誤訊息更有辨識度 */
+    .stSuccess, .stError { padding: 10px; border-radius: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- 2. 數據核心邏輯 ---
 
 def save_to_csv():
-    """將當前內存中的 df 永久保存到檔案"""
     try:
         save_df = st.session_state.df.copy()
         if 'original_index' in save_df.columns:
@@ -28,7 +28,6 @@ def save_to_csv():
         return False
 
 def initialize_data():
-    """初始化數據表，確保具備行號和錯誤統計功能"""
     if 'df' not in st.session_state:
         if os.path.exists("answer.csv"):
             try:
@@ -43,7 +42,6 @@ def initialize_data():
             except Exception as e:
                 st.error(f"解析檔案出錯：{e}")
         else:
-            st.warning("找不到 answer.csv，已建立空庫。")
             st.session_state.df = pd.DataFrame(columns=['question', '正確答案', 'wrong_count', 'original_index'])
 
 initialize_data()
@@ -55,7 +53,7 @@ if 'test_set' not in st.session_state:
     st.session_state.submitted = False
     st.session_state.last_result = None
 
-# --- 4. 側邊欄與導航 ---
+# --- 4. 側邊欄導航 ---
 st.sidebar.title("🎮 功能選單")
 mode = st.sidebar.radio("請選擇模式", ["隨機測驗", "錯題本管理", "隨機錯題本測驗"])
 
@@ -67,7 +65,7 @@ if st.session_state.last_mode != mode:
     st.session_state.submitted = False
     st.session_state.last_mode = mode
 
-# --- 5. 測驗組件渲染 ---
+# --- 5. 核心組件：優化後的測驗渲染函數 ---
 
 def render_quiz(quiz_data, mode_title):
     if not quiz_data:
@@ -79,39 +77,59 @@ def render_quiz(quiz_data, mode_title):
         q = quiz_data[idx]
         row_num = q.get('original_index', 'N/A')
         
+        # 顯示標題
         st.write(f"**[{mode_title}] 第 {idx + 1} / {len(quiz_data)} 題** (行號: {row_num})")
         st.subheader(q.get('question', '未命名題目'))
         
+        # 提取選項
         opts = {chr(65+i): q[f'選項{chr(65+i)}'] for i in range(26) 
                 if f'選項{chr(65+i)}' in q and pd.notna(q[f'選項{chr(65+i)}'])}
         options_text = [f"{k}. {v}" for k, v in opts.items()]
         
+        # --- 改動重點：顯示選項 ---
+        # 如果已經提交，則禁用 radio 防止修改
+        user_choice = st.radio(
+            "請選擇答案：", 
+            options_text, 
+            key=f"r_{idx}_{row_num}",
+            disabled=st.session_state.submitted
+        )
+        
+        st.write("---")
+        
+        # 邏輯控制按鈕區域
         if not st.session_state.submitted:
-            user_choice = st.radio("請選擇答案：", options_text, key=f"r_{idx}_{row_num}")
-            if st.button("提交答案", type="primary"):
+            if st.button("確認提交", type="primary"):
                 st.session_state.submitted = True
                 user_ans = user_choice[0] if user_choice else ""
                 correct_ans = str(q.get('正確答案', ''))
                 
                 if user_ans == correct_ans:
-                    st.session_state.last_result = ("success", "✅ 正確！")
+                    st.session_state.last_result = ("success", f"✅ 正確！答案就是 {correct_ans}")
                 else:
                     st.session_state.last_result = ("error", f"❌ 錯誤！正確答案是：{correct_ans}")
+                    # 更新錯誤次數
                     st.session_state.df.loc[st.session_state.df['original_index'] == row_num, 'wrong_count'] += 1
                     save_to_csv()
-                st.rerun()
+                st.rerun() # 為了刷新按鈕狀態和禁用選項，這裡需要一次 rerun
         else:
+            # 答題後的顯示狀態：保留題目，並在下方顯示結果
             res_type, res_msg = st.session_state.last_result
-            if res_type == "success": st.success(res_msg)
-            else: st.error(res_msg)
+            if res_type == "success":
+                st.success(res_msg)
+            else:
+                st.error(res_msg)
             
-            if st.button("下一題 ➡️"):
+            # 顯示「下一題」按鈕
+            if st.button("下一題 ➡️", type="secondary"):
                 st.session_state.current_idx += 1
                 st.session_state.submitted = False
+                st.session_state.last_result = None
                 st.rerun()
+
     else:
         st.balloons()
-        st.success("🎉 測驗完成！")
+        st.success("🎉 本次測驗已完成！")
         if st.button("返回"):
             st.session_state.test_set = []
             st.session_state.current_idx = 0
@@ -127,6 +145,7 @@ if mode == "隨機測驗":
         if st.button("開始測驗", type="primary"):
             st.session_state.test_set = st.session_state.df.sample(n=num).to_dict('records')
             st.session_state.current_idx = 0
+            st.session_state.submitted = False
             st.rerun()
     else:
         if st.sidebar.button("❌ 中止測驗"):
@@ -141,8 +160,6 @@ elif mode == "錯題本管理":
     with tab1:
         st.dataframe(st.session_state.df[['original_index', 'question', '正確答案', 'wrong_count']], 
                      use_container_width=True, hide_index=True)
-        if st.button("💾 手動存檔至 CSV"):
-            if save_to_csv(): st.toast("存檔成功！")
 
     with tab2:
         with st.form("add_form"):
@@ -171,14 +188,11 @@ elif mode == "錯題本管理":
     with tab4:
         st.subheader("❌ 錯題統計與歸零")
         wrong_df = st.session_state.df[st.session_state.df['wrong_count'] > 0].sort_values('wrong_count', ascending=False)
-        
         if wrong_df.empty:
             st.success("目前沒有任何錯題記錄！")
         else:
-            st.write(f"目前有 {len(wrong_df)} 題存在錯誤記錄：")
             st.dataframe(wrong_df[['original_index', 'wrong_count', 'question', '正確答案']], 
                          use_container_width=True, hide_index=True)
-            
             c1, c2 = st.columns(2)
             with c1:
                 target_reset = st.number_input("歸零特定行號", step=1, min_value=1, key="reset_one")
@@ -187,7 +201,6 @@ elif mode == "錯題本管理":
                     save_to_csv()
                     st.rerun()
             with c2:
-                st.write("---")
                 if st.button("🔥 清空所有錯題記錄"):
                     st.session_state.df['wrong_count'] = 0
                     save_to_csv()
@@ -198,12 +211,13 @@ elif mode == "隨機錯題本測驗":
     if not st.session_state.test_set:
         wrong_pool = st.session_state.df[st.session_state.df['wrong_count'] > 0]
         if wrong_pool.empty:
-            st.info("✨ 暫無錯題，請去隨機測驗積累題目。")
+            st.info("✨ 暫無錯題。")
         else:
             st.write(f"錯題本共計 **{len(wrong_pool)}** 題。")
             if st.button("開始抽題測驗", type="primary"):
                 st.session_state.test_set = wrong_pool.sample(frac=1).to_dict('records')
                 st.session_state.current_idx = 0
+                st.session_state.submitted = False
                 st.rerun()
     else:
         if st.sidebar.button("❌ 結束測驗"):
