@@ -9,8 +9,7 @@ st.markdown("""
     <style>
     .stRadio [role="radiogroup"] { margin-top: 10px; }
     .stButton button { width: 100%; }
-    /* 讓正確/錯誤訊息更有辨識度 */
-    .stSuccess, .stError { padding: 10px; border-radius: 5px; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -52,20 +51,28 @@ if 'test_set' not in st.session_state:
     st.session_state.current_idx = 0
     st.session_state.submitted = False
     st.session_state.last_result = None
+    # 新增：本次測驗的分數統計
+    st.session_state.score = {"correct": 0, "wrong": 0}
 
 # --- 4. 側邊欄導航 ---
 st.sidebar.title("🎮 功能選單")
 mode = st.sidebar.radio("請選擇模式", ["隨機測驗", "錯題本管理", "隨機錯題本測驗"])
 
-if 'last_mode' not in st.session_state:
-    st.session_state.last_mode = mode
-if st.session_state.last_mode != mode:
+# 模式切換或重新開始時的重置函數
+def reset_test_state():
     st.session_state.test_set = []
     st.session_state.current_idx = 0
     st.session_state.submitted = False
+    st.session_state.last_result = None
+    st.session_state.score = {"correct": 0, "wrong": 0}
+
+if 'last_mode' not in st.session_state:
+    st.session_state.last_mode = mode
+if st.session_state.last_mode != mode:
+    reset_test_state()
     st.session_state.last_mode = mode
 
-# --- 5. 核心組件：優化後的測驗渲染函數 ---
+# --- 5. 核心組件：測驗渲染函數 ---
 
 def render_quiz(quiz_data, mode_title):
     if not quiz_data:
@@ -77,17 +84,13 @@ def render_quiz(quiz_data, mode_title):
         q = quiz_data[idx]
         row_num = q.get('original_index', 'N/A')
         
-        # 顯示標題
         st.write(f"**[{mode_title}] 第 {idx + 1} / {len(quiz_data)} 題** (行號: {row_num})")
         st.subheader(q.get('question', '未命名題目'))
         
-        # 提取選項
         opts = {chr(65+i): q[f'選項{chr(65+i)}'] for i in range(26) 
                 if f'選項{chr(65+i)}' in q and pd.notna(q[f'選項{chr(65+i)}'])}
         options_text = [f"{k}. {v}" for k, v in opts.items()]
         
-        # --- 改動重點：顯示選項 ---
-        # 如果已經提交，則禁用 radio 防止修改
         user_choice = st.radio(
             "請選擇答案：", 
             options_text, 
@@ -97,7 +100,6 @@ def render_quiz(quiz_data, mode_title):
         
         st.write("---")
         
-        # 邏輯控制按鈕區域
         if not st.session_state.submitted:
             if st.button("確認提交", type="primary"):
                 st.session_state.submitted = True
@@ -105,34 +107,51 @@ def render_quiz(quiz_data, mode_title):
                 correct_ans = str(q.get('正確答案', ''))
                 
                 if user_ans == correct_ans:
+                    st.session_state.score["correct"] += 1
                     st.session_state.last_result = ("success", f"✅ 正確！答案就是 {correct_ans}")
                 else:
+                    st.session_state.score["wrong"] += 1
                     st.session_state.last_result = ("error", f"❌ 錯誤！正確答案是：{correct_ans}")
-                    # 更新錯誤次數
+                    # 同步到主數據庫
                     st.session_state.df.loc[st.session_state.df['original_index'] == row_num, 'wrong_count'] += 1
                     save_to_csv()
-                st.rerun() # 為了刷新按鈕狀態和禁用選項，這裡需要一次 rerun
+                st.rerun()
         else:
-            # 答題後的顯示狀態：保留題目，並在下方顯示結果
             res_type, res_msg = st.session_state.last_result
-            if res_type == "success":
-                st.success(res_msg)
-            else:
-                st.error(res_msg)
+            if res_type == "success": st.success(res_msg)
+            else: st.error(res_msg)
             
-            # 顯示「下一題」按鈕
-            if st.button("下一題 ➡️", type="secondary"):
+            if st.button("下一題 ➡️"):
                 st.session_state.current_idx += 1
                 st.session_state.submitted = False
                 st.session_state.last_result = None
                 st.rerun()
 
     else:
+        # --- 測驗結束統計界面 ---
         st.balloons()
-        st.success("🎉 本次測驗已完成！")
-        if st.button("返回"):
-            st.session_state.test_set = []
-            st.session_state.current_idx = 0
+        st.header("📊 測驗結算報告")
+        
+        correct = st.session_state.score["correct"]
+        wrong = st.session_state.score["wrong"]
+        total = correct + wrong
+        accuracy = (correct / total * 100) if total > 0 else 0
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("答對題數", f"{correct} 題")
+        col2.metric("答錯題數", f"{wrong} 題")
+        col3.metric("本次正確率", f"{accuracy:.1f}%")
+        
+        st.write("---")
+        if accuracy >= 80:
+            st.success("優秀！表現非常穩定。")
+        elif accuracy >= 60:
+            st.warning("還不錯，建議針對錯題進行強化。")
+        else:
+            st.error("仍有進步空間，加油！")
+
+        if st.button("結束測驗並返回"):
+            reset_test_state()
             st.rerun()
 
 # --- 6. 主頁面邏輯 ---
@@ -143,13 +162,12 @@ if mode == "隨機測驗":
         max_num = len(st.session_state.df)
         num = st.number_input("抽取題數", 1, max_num, min(10, max_num))
         if st.button("開始測驗", type="primary"):
+            reset_test_state() # 確保開始時分數是 0
             st.session_state.test_set = st.session_state.df.sample(n=num).to_dict('records')
-            st.session_state.current_idx = 0
-            st.session_state.submitted = False
             st.rerun()
     else:
         if st.sidebar.button("❌ 中止測驗"):
-            st.session_state.test_set = []
+            reset_test_state()
             st.rerun()
         render_quiz(st.session_state.test_set, "隨機測驗")
 
@@ -211,16 +229,15 @@ elif mode == "隨機錯題本測驗":
     if not st.session_state.test_set:
         wrong_pool = st.session_state.df[st.session_state.df['wrong_count'] > 0]
         if wrong_pool.empty:
-            st.info("✨ 暫無錯題。")
+            st.info("✨ 暫無錯題記錄。")
         else:
             st.write(f"錯題本共計 **{len(wrong_pool)}** 題。")
             if st.button("開始抽題測驗", type="primary"):
+                reset_test_state()
                 st.session_state.test_set = wrong_pool.sample(frac=1).to_dict('records')
-                st.session_state.current_idx = 0
-                st.session_state.submitted = False
                 st.rerun()
     else:
         if st.sidebar.button("❌ 結束測驗"):
-            st.session_state.test_set = []
+            reset_test_state()
             st.rerun()
         render_quiz(st.session_state.test_set, "錯題強化")
